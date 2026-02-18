@@ -8,7 +8,7 @@ from src.preprocessing import preprocess
 def train_kmeans():
 
     # Load dataset
-    df = load_data("data/mall_customers.csv")
+    df = load_data("data/Mall_Customers.csv")
 
     # Preprocess
     data, scaler = preprocess(df)
