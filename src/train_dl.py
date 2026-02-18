@@ -1,33 +1,37 @@
-import tensorflow as tf
-from tensorflow.keras import layers, models
-import mlflow
-import mlflow.tensorflow
 import os
+import joblib
+import mlflow
+import mlflow.sklearn
+from sklearn.cluster import KMeans
+from src.data_loader import load_data
+from src.preprocessing import preprocess
 
-def train_autoencoder(data):
 
-    mlflow.set_experiment("Consumer_Segmentation_DL")
+def train_kmeans():
+
+    # Load dataset
+    df = load_data("data/mall_customers.csv")
+
+    # Preprocess
+    data, scaler = preprocess(df)   # ✅ VERY IMPORTANT
+
+    mlflow.set_experiment("Consumer_Segmentation_ML")
 
     with mlflow.start_run():
 
-        input_dim = data.shape[1]
-
-        input_layer = layers.Input(shape=(input_dim,))
-        encoder = layers.Dense(16, activation="relu")(input_layer)
-        encoder = layers.Dense(8, activation="relu")(encoder)
-
-        decoder = layers.Dense(16, activation="relu")(encoder)
-        decoder = layers.Dense(input_dim, activation="linear")(decoder)
-
-        autoencoder = models.Model(input_layer, decoder)
-
-        autoencoder.compile(optimizer="adam", loss="mse")
-
-        autoencoder.fit(data, data, epochs=50, batch_size=16, verbose=1)
+        model = KMeans(n_clusters=5, random_state=42)
+        model.fit(data)
 
         os.makedirs("models", exist_ok=True)
-        autoencoder.save("models/autoencoder.h5")
 
-        mlflow.tensorflow.log_model(autoencoder, "autoencoder_model")
+        # Save model
+        joblib.dump(model, "models/kmeans.pkl")
 
-        print("Autoencoder trained successfully")
+        # Save scaler
+        joblib.dump(scaler, "models/scaler.pkl")
+
+        print("✅ Model and scaler saved successfully")
+
+
+if __name__ == "__main__":
+    train_kmeans()

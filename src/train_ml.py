@@ -1,7 +1,5 @@
 import os
 import joblib
-import mlflow
-import mlflow.sklearn
 from sklearn.cluster import KMeans
 from src.data_loader import load_data
 from src.preprocessing import preprocess
@@ -15,25 +13,21 @@ def train_kmeans():
     # Preprocess
     data, scaler = preprocess(df)
 
-    mlflow.set_experiment("Consumer_Segmentation_ML")
+    # Train model
+    model = KMeans(n_clusters=5, random_state=42)
+    model.fit(data)
 
-    with mlflow.start_run():
+    # Create models folder
+    os.makedirs("models", exist_ok=True)
 
-        model = KMeans(n_clusters=5, random_state=42)
-        model.fit(data)
+    # Save model
+    joblib.dump(model, "models/kmeans.pkl")
 
-        # Create models folder if not exists
-        os.makedirs("models", exist_ok=True)
+    # Save scaler
+    joblib.dump(scaler, "models/scaler.pkl")
 
-        # Save model
-        joblib.dump(model, "models/kmeans.pkl")
-
-        print("✅ KMeans model trained successfully")
-        print("📁 Model saved at models/kmeans.pkl")
+    print("✅ Model and scaler saved successfully")
 
 
-# 🔥 THIS IS THE IMPORTANT PART
 if __name__ == "__main__":
     train_kmeans()
-
-joblib.dump(scaler, "models/scaler.pkl")

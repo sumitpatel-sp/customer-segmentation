@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import numpy as np
 import joblib
+from src.train_ml import train_kmeans
+
 
 app = FastAPI()
 
@@ -24,3 +26,8 @@ def predict(customer: Customer):
     cluster = model.predict(data)
 
     return {"Cluster": int(cluster[0])}
+
+@app.post("/retrain")
+def retrain_model():
+    train_kmeans()
+    return {"message": "Model retrained successfully"}
