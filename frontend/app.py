@@ -14,7 +14,7 @@ USD_TO_INR = 83  # Fixed conversion rate
 # 🔹 LOAD DATA + MODEL FOR SEGMENT ANALYSIS
 # =====================================================
 
-df = pd.read_csv("data/mall_customers.csv")
+df = pd.read_csv("data/Mall_Customers.csv")
 
 model = joblib.load("models/kmeans.pkl")
 scaler = joblib.load("models/scaler.pkl")
