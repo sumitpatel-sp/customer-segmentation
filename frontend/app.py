@@ -1,10 +1,10 @@
 import streamlit as st
 import requests
 import pandas as pd
-import os
 
 
 USD_TO_INR = 83  # Fixed (demo) conversion rate
+API_URL = "https://customer-segmentation-1-oaky.onrender.com"
 
 
 @st.cache_data
@@ -12,25 +12,9 @@ def load_data():
     return pd.read_csv("data/Mall_Customers.csv")
 
 
-def get_api_url() -> str:
-    try:
-        secret_url = st.secrets.get("API_URL", None)
-        if secret_url:
-            return str(secret_url).rstrip("/")
-    except Exception:
-        pass
-
-    env_url = os.environ.get("API_URL")
-    if env_url:
-        return env_url.rstrip("/")
-
-    # Local dev default
-    return "https://customer-segmentation-1-oaky.onrender.com"
-
-
 @st.cache_data(ttl=60)
-def fetch_segment_summary(api_url: str):
-    r = requests.get(f"{api_url}/segments/summary", timeout=15)
+def fetch_segment_summary():
+    r = requests.get(f"{API_URL}/segments/summary", timeout=15)
     r.raise_for_status()
     return r.json()
 
@@ -44,18 +28,10 @@ def main():
         "Interactively explore segments and score new customers."
     )
 
-    api_url = get_api_url()
-
-    with st.sidebar:
-        st.markdown("### Settings")
-        st.write("Backend API URL")
-        st.code(api_url)
-        st.caption("For Streamlit Cloud: set `API_URL` in app secrets.")
-
     df_raw = load_data()
 
     try:
-        summary = fetch_segment_summary(api_url)
+        summary = fetch_segment_summary()
     except requests.exceptions.RequestException:
         st.error(
             "Backend API is not reachable. Please deploy/run FastAPI and set `API_URL` correctly."
@@ -161,7 +137,7 @@ def main():
                     income_k_dollar = usd / 1000
 
                     response = requests.post(
-                        f"{api_url}/predict",
+                        f"{API_URL}/predict",
                         json={
                             "Gender": gender,
                             "Age": age,
