@@ -25,7 +25,7 @@ def get_api_url() -> str:
         return env_url.rstrip("/")
 
     # Local dev default
-    return "http://127.0.0.1:8000"
+    return "https://customer-segmentation-1-oaky.onrender.com"
 
 
 @st.cache_data(ttl=60)
