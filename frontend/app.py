@@ -4,7 +4,7 @@ import pandas as pd
 import joblib
 
 
-API_URL = "http://127.0.0.1:8000"
+API_URL = "https://customer-segmentation-1-oaky.onrender.com"
 USD_TO_INR = 83  # Fixed (demo) conversion rate
 
 
