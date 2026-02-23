@@ -3,9 +3,10 @@ numpy
 scikit-learn
 matplotlib
 seaborn
-tensorflow
-mlflow
 fastapi
 uvicorn
 pyyaml
 joblib
+streamlit
+pydantic
+requests
