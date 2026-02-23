@@ -10,3 +10,4 @@ joblib
 streamlit
 pydantic
 requests
+altair<5
