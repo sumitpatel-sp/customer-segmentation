@@ -1,49 +1,38 @@
 import streamlit as st
 import requests
 import pandas as pd
-import joblib
+import os
 
 
-API_URL = "https://customer-segmentation-1-oaky.onrender.com"
 USD_TO_INR = 83  # Fixed (demo) conversion rate
 
 
 @st.cache_data
 def load_data():
-    df = pd.read_csv("data/Mall_Customers.csv")
-    return df
+    return pd.read_csv("data/Mall_Customers.csv")
 
 
-@st.cache_resource
-def load_model_and_scaler():
-    model = joblib.load("models/kmeans.pkl")
-    scaler = joblib.load("models/scaler.pkl")
-    return model, scaler
+def get_api_url() -> str:
+    try:
+        secret_url = st.secrets.get("API_URL", None)
+        if secret_url:
+            return str(secret_url).rstrip("/")
+    except Exception:
+        pass
+
+    env_url = os.environ.get("API_URL")
+    if env_url:
+        return env_url.rstrip("/")
+
+    # Local dev default
+    return "http://127.0.0.1:8000"
 
 
-def build_segment_labels(df_with_clusters):
-    cluster_summary = df_with_clusters.groupby("Cluster")[[
-        "Annual Income (k$)",
-        "Spending Score (1-100)",
-    ]].mean()
-
-    segment_meanings = {}
-    for cluster_id, row in cluster_summary.iterrows():
-        income = row["Annual Income (k$)"]
-        spending = row["Spending Score (1-100)"]
-
-        if income < 50 and spending < 50:
-            label = "Low Income - Low Spending"
-        elif income >= 50 and spending >= 50:
-            label = "High Income - High Spending"
-        elif income >= 50 and spending < 50:
-            label = "High Income - Low Spending"
-        else:
-            label = "Low Income - High Spending"
-
-        segment_meanings[cluster_id] = label
-
-    return cluster_summary, segment_meanings
+@st.cache_data(ttl=60)
+def fetch_segment_summary(api_url: str):
+    r = requests.get(f"{api_url}/segments/summary", timeout=15)
+    r.raise_for_status()
+    return r.json()
 
 
 def main():
@@ -55,23 +44,31 @@ def main():
         "Interactively explore segments and score new customers."
     )
 
-    # -----------------------------
-    # Load core artefacts
-    # -----------------------------
+    api_url = get_api_url()
+
+    with st.sidebar:
+        st.markdown("### Settings")
+        st.write("Backend API URL")
+        st.code(api_url)
+        st.caption("For Streamlit Cloud: set `API_URL` in app secrets.")
+
     df_raw = load_data()
-    model, scaler = load_model_and_scaler()
 
-    # Preprocess same as training
-    df_proc = df_raw.copy()
-    df_proc = df_proc.drop("CustomerID", axis=1)
-    df_proc["Gender"] = df_proc["Gender"].map({"Male": 0, "Female": 1})
-    features = df_proc[["Gender", "Age", "Annual Income (k$)", "Spending Score (1-100)"]]
+    try:
+        summary = fetch_segment_summary(api_url)
+    except requests.exceptions.RequestException:
+        st.error(
+            "Backend API is not reachable. Please deploy/run FastAPI and set `API_URL` correctly."
+        )
+        st.stop()
 
-    scaled = scaler.transform(features)
-    df_with_clusters = df_raw.copy()
-    df_with_clusters["Cluster"] = model.predict(scaled)
+    if isinstance(summary, dict) and summary.get("error"):
+        st.error(summary["error"])
+        st.stop()
 
-    cluster_summary, segment_meanings = build_segment_labels(df_with_clusters)
+    segment_meanings = summary.get("segment_meanings", {})
+    cluster_summary_df = pd.DataFrame(summary.get("cluster_summary", []))
+    segment_sizes_df = pd.DataFrame(summary.get("segment_sizes", []))
 
     # -----------------------------
     # Layout: tabs
@@ -88,26 +85,22 @@ def main():
 
         with col_left:
             st.markdown("**Sample of customers**")
-            st.dataframe(df_with_clusters.head(15), use_container_width=True)
+            st.dataframe(df_raw.head(15), use_container_width=True)
 
         with col_right:
             st.markdown("**Key metrics**")
-            total_customers = len(df_with_clusters)
-            n_segments = df_with_clusters["Cluster"].nunique()
+            total_customers = summary.get("total_customers", 0)
+            n_segments = summary.get("n_segments", 0)
 
             col_a, col_b = st.columns(2)
             col_a.metric("Total Customers", f"{total_customers}")
             col_b.metric("Number of Segments", f"{n_segments}")
 
             st.markdown("**Segment Size Distribution**")
-            size_df = (
-                df_with_clusters["Cluster"]
-                .value_counts()
-                .sort_index()
-                .rename_axis("Cluster")
-                .reset_index(name="Count")
-            )
-            st.bar_chart(size_df.set_index("Cluster"))
+            if not segment_sizes_df.empty and "Cluster" in segment_sizes_df.columns:
+                st.bar_chart(segment_sizes_df.set_index("Cluster"))
+            else:
+                st.info("No segment size data available.")
 
     # ====== SEGMENT INSIGHTS TAB ======
     with tab_segments:
@@ -119,23 +112,34 @@ def main():
 
         # Show high‑level summary table
         st.markdown("**Average Income & Spending by Segment**")
-        st.dataframe(cluster_summary.style.format({"Annual Income (k$)": "{:.1f}", "Spending Score (1-100)": "{:.1f}"}))
+        if not cluster_summary_df.empty:
+            st.dataframe(
+                cluster_summary_df.style.format(
+                    {"Annual Income (k$)": "{:.1f}", "Spending Score (1-100)": "{:.1f}"}
+                ),
+                use_container_width=True,
+            )
+        else:
+            st.info("No cluster summary available.")
 
         st.markdown("---")
         st.markdown("**Business‑friendly segment descriptions**")
 
-        cols = st.columns(len(segment_meanings) if segment_meanings else 1)
-        for idx, (cluster_id, meaning) in enumerate(segment_meanings.items()):
-            with cols[idx]:
+        items = list(segment_meanings.items())
+        try:
+            items = sorted(items, key=lambda x: int(x[0]))
+        except Exception:
+            pass
+
+        cols = st.columns(len(items) if items else 1)
+        for idx, (cluster_id, meaning) in enumerate(items):
+            with cols[idx % len(cols)]:
                 st.markdown(f"##### Segment {cluster_id}")
                 st.write(meaning)
-
-                subset = df_with_clusters[df_with_clusters["Cluster"] == cluster_id]
-                st.caption(
-                    f"Customers: {len(subset)} | "
-                    f"Avg Age: {subset['Age'].mean():.1f} | "
-                    f"Avg Income: {subset['Annual Income (k$)'].mean():.1f} k$"
-                )
+                if not segment_sizes_df.empty and "Cluster" in segment_sizes_df.columns:
+                    row = segment_sizes_df[segment_sizes_df["Cluster"] == int(cluster_id)]
+                    if len(row) == 1:
+                        st.caption(f"Customers: {int(row.iloc[0]['Count'])}")
 
     # ====== PREDICT TAB ======
     with tab_predict:
@@ -157,7 +161,7 @@ def main():
                     income_k_dollar = usd / 1000
 
                     response = requests.post(
-                        f"{API_URL}/predict",
+                        f"{api_url}/predict",
                         json={
                             "Gender": gender,
                             "Age": age,
@@ -174,7 +178,10 @@ def main():
                         if cluster is None:
                             st.error("Unexpected response from backend.")
                         else:
-                            meaning = segment_meanings.get(cluster, "Unknown Segment")
+                            meaning = segment_meanings.get(
+                                str(cluster),
+                                segment_meanings.get(cluster, "Unknown Segment"),
+                            )
                             st.success(f"Predicted Segment: {cluster}")
                             st.info(f"Segment Meaning: {meaning}")
                             st.caption(
