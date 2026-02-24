@@ -14,7 +14,7 @@ def train_kmeans():
     data, scaler = preprocess(df)
 
     # Train model
-    model = KMeans(n_clusters=5, random_state=42)
+    model = KMeans(n_clusters=4, random_state=42)
     model.fit(data)
 
     # Create models folder

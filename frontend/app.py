@@ -77,6 +77,35 @@ def get_segment_name(income_k: float, spending: float) -> str:
         return "Low Income - Low Spending"
 
 
+def assign_cluster_segments(cs_df: "pd.DataFrame") -> "pd.DataFrame":
+    """Assign unique segment names to exactly 4 clusters by ranking centroids.
+    Guarantees no duplicate labels regardless of where centroids fall numerically.
+    Top-2 income clusters → 'High Income'; bottom-2 → 'Low Income'.
+    Within each income pair, higher spending → 'High Spending'.
+    """
+    df = cs_df.copy().reset_index(drop=True)
+    n = len(df)
+    half = n // 2
+
+    # Rank by income (1 = highest), break ties by index
+    inc_ranks = df["Annual Income (k$)"].rank(ascending=False, method="first").astype(int)
+    high_inc_idx = df.index[inc_ranks <= half].tolist()
+    low_inc_idx  = df.index[inc_ranks >  half].tolist()
+
+    # Within each income group, rank by spending to pick High/Low Spending
+    hi_grp = df.loc[high_inc_idx].sort_values("Spending Score (1-100)", ascending=False)
+    lo_grp = df.loc[low_inc_idx ].sort_values("Spending Score (1-100)", ascending=False)
+
+    seg_map = {}
+    if len(hi_grp) >= 1: seg_map[hi_grp.index[0]] = "High Income - High Spending"
+    if len(hi_grp) >= 2: seg_map[hi_grp.index[1]] = "High Income - Low Spending"
+    if len(lo_grp) >= 1: seg_map[lo_grp.index[0]] = "Low Income - High Spending"
+    if len(lo_grp) >= 2: seg_map[lo_grp.index[1]] = "Low Income - Low Spending"
+
+    df["Segment"] = df.index.map(seg_map)
+    return df
+
+
 # ─────────────────────────────────────────────
 # DATA LOADERS
 # ─────────────────────────────────────────────
@@ -279,10 +308,8 @@ def main():
         .mean()
         .reset_index()
     )
-    cluster_summary["Segment"] = cluster_summary.apply(
-        lambda r: get_segment_name(r["Annual Income (k$)"], r["Spending Score (1-100)"]),
-        axis=1,
-    )
+    # Use rank-based assignment to guarantee 4 unique segment labels
+    cluster_summary = assign_cluster_segments(cluster_summary)
 
     seg_sizes = (
         df_clustered["Segment"]
