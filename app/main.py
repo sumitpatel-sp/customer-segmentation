@@ -7,6 +7,7 @@ import pandas as pd
 
 from src.train_ml import train_kmeans
 from src.predict import predict_cluster
+from src.segment_logic import get_segment_info
 
 
 app = FastAPI()
@@ -66,7 +67,13 @@ def predict(customer: Customer):
         customer.Spending,
     ]
     cluster = predict_cluster(data, model=model, scaler=scaler)
-    return {"Cluster": cluster}
+    seg_info = get_segment_info(customer.Income, customer.Spending)
+    return {
+        "Cluster": cluster,
+        "segment_name": seg_info["name"],
+        "description": seg_info["description"],
+        "strategy": seg_info["strategy"],
+    }
 
 
 @app.get("/health")
@@ -104,22 +111,22 @@ def segment_summary():
         .reset_index(name="Count")
     )
 
+    # Build scatter plot data: income, spending, cluster for every customer
+    scatter_data = df_with_clusters[
+        ["Annual Income (k$)", "Spending Score (1-100)", "Cluster"]
+    ].to_dict(orient="records")
+
     meanings = {}
+    strategies = {}
+    descriptions = {}
     for _, row in cluster_summary.iterrows():
         cluster_id = int(row["Cluster"])
         income = float(row["Annual Income (k$)"])
         spending = float(row["Spending Score (1-100)"])
-
-        if income < 50 and spending < 50:
-            label = "Low Income - Low Spending"
-        elif income >= 50 and spending >= 50:
-            label = "High Income - High Spending"
-        elif income >= 50 and spending < 50:
-            label = "High Income - Low Spending"
-        else:
-            label = "Low Income - High Spending"
-
-        meanings[cluster_id] = label
+        seg_info = get_segment_info(income, spending)
+        meanings[cluster_id] = seg_info["name"]
+        strategies[cluster_id] = seg_info["strategy"]
+        descriptions[cluster_id] = seg_info["description"]
 
     return {
         "total_customers": int(len(df_with_clusters)),
@@ -127,6 +134,9 @@ def segment_summary():
         "cluster_summary": cluster_summary.to_dict(orient="records"),
         "segment_sizes": segment_sizes.to_dict(orient="records"),
         "segment_meanings": meanings,
+        "segment_strategies": strategies,
+        "segment_descriptions": descriptions,
+        "scatter_data": scatter_data,
     }
 
 
