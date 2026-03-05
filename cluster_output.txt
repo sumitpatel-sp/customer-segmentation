@@ -1,0 +1,16 @@
+C:\Users\sumit\AppData\Local\Programs\Python\Python310\lib\site-packages\sklearn\utils\validation.py:2739: UserWarning: X does not have valid feature names, but StandardScaler was fitted with feature names
+  warnings.warn(
+Traceback (most recent call last):
+=== Cluster Centroids ===
+         Annual Income (k$)  Spending Score (1-100)
+Cluster                                            
+0                      46.9                    39.9
+1                      88.5                    16.8
+2                      60.9                    70.2
+3                      58.3                    64.4
+
+  File "C:\Users\sumit\OneDrive\Desktop\consumer segmentation\check_clusters.py", line 25, in <module>
+    print("=== Cluster \u2192 Segment Mapping (derived from centroids) ===")
+  File "C:\Users\sumit\AppData\Local\Programs\Python\Python310\lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2192' in position 12: character maps to <undefined>
