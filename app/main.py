@@ -23,12 +23,47 @@ scaler = None
 # e.g. { 0: {"name": "Low Income - Low Spending", ...}, 2: {"name": "High Income - High Spending", ...} }
 CLUSTER_TO_SEGMENT = {}
 
+# All segment definitions — used by get_segment_info_by_name
+SEGMENT_INFO = {
+    "High Income - High Spending": {
+        "name":        "High Income - High Spending",
+        "description": "Valuable customers already spending a lot",
+        "strategy":    "Loyalty rewards, premium membership, early product access",
+    },
+    "High Income - Low Spending": {
+        "name":        "High Income - Low Spending",
+        "description": "Have money but are not spending much",
+        "strategy":    "Upsell, targeted marketing, premium recommendations",
+    },
+    "Low Income - High Spending": {
+        "name":        "Low Income - High Spending",
+        "description": "Spending a lot but are budget sensitive",
+        "strategy":    "Discounts, bundles, retarget offers",
+    },
+    "Low Income - Low Spending": {
+        "name":        "Low Income - Low Spending",
+        "description": "Low value customers — minimal engagement",
+        "strategy":    "Low cost campaigns, awareness campaigns (avoid heavy spend)",
+    },
+}
+
+
+def get_segment_info_by_name(name: str) -> dict:
+    """Return segment info dict by segment name. Falls back to income/spending rules."""
+    return SEGMENT_INFO.get(name, SEGMENT_INFO["Low Income - Low Spending"])
+
+
 
 def _build_cluster_segment_map():
     """
-    Compute the segment label for each cluster by applying threshold rules
-    to that cluster's centroid (average income & spending).
-    This runs once at startup so the cluster number IS the source of truth.
+    Assign a UNIQUE segment to each cluster by ranking centroids.
+
+    Method (same as frontend assign_cluster_segments):
+      1. Rank all clusters by average income → top half = "High Income"
+      2. Within each income group, higher avg spending → "High Spending"
+
+    This guarantees all 4 segments always appear, even if two centroids
+    happen to sit on the same side of the 50k/50-score threshold.
     """
     global CLUSTER_TO_SEGMENT
     CLUSTER_TO_SEGMENT = {}
@@ -39,21 +74,30 @@ def _build_cluster_segment_map():
     df = pd.read_csv(DATA_PATH)
     df["Gender"] = df["Gender"].map({"Male": 0, "Female": 1})
     X = df[["Gender", "Age", "Annual Income (k$)", "Spending Score (1-100)"]].to_numpy()
-    X_scaled = scaler.transform(X)
-    df["Cluster"] = model.predict(X_scaled)
+    df["Cluster"] = model.predict(scaler.transform(X))
 
-    # For each cluster, take the average income & spending of its members
-    # and use that to decide the segment name (centroid-based, not per-point)
-    cluster_summary = (
+    summary = (
         df.groupby("Cluster")[["Annual Income (k$)", "Spending Score (1-100)"]]
         .mean()
+        .reset_index()
     )
-    for cluster_id, row in cluster_summary.iterrows():
-        seg_info = get_segment_info(
-            income=float(row["Annual Income (k$)"]),
-            spending=float(row["Spending Score (1-100)"]),
-        )
-        CLUSTER_TO_SEGMENT[int(cluster_id)] = seg_info
+
+    n    = len(summary)
+    half = n // 2
+
+    # Rank by income: top half → High Income, bottom half → Low Income
+    summary["inc_rank"] = summary["Annual Income (k$)"].rank(ascending=False, method="first").astype(int)
+    high_inc = summary[summary["inc_rank"] <= half].sort_values("Spending Score (1-100)", ascending=False)
+    low_inc  = summary[summary["inc_rank"] >  half].sort_values("Spending Score (1-100)", ascending=False)
+
+    seg_assignments = {}
+    if len(high_inc) >= 1: seg_assignments[int(high_inc.iloc[0]["Cluster"])] = "High Income - High Spending"
+    if len(high_inc) >= 2: seg_assignments[int(high_inc.iloc[1]["Cluster"])] = "High Income - Low Spending"
+    if len(low_inc)  >= 1: seg_assignments[int(low_inc.iloc[0]["Cluster"])]  = "Low Income - High Spending"
+    if len(low_inc)  >= 2: seg_assignments[int(low_inc.iloc[1]["Cluster"])]  = "Low Income - Low Spending"
+
+    for cluster_id, seg_name in seg_assignments.items():
+        CLUSTER_TO_SEGMENT[cluster_id] = get_segment_info_by_name(seg_name)
 
     print("✅ Cluster → Segment map built:")
     for cid, info in CLUSTER_TO_SEGMENT.items():
