@@ -1,0 +1,11 @@
+Low income + Low spending
+  -> Cluster 0 -> Low Income - Low Spending
+
+Low income + High spending
+  -> Cluster 2 -> High Income - High Spending
+
+High income + Low spending
+  -> Cluster 1 -> High Income - Low Spending
+
+High income + High spending
+  -> Cluster 2 -> High Income - High Spending
