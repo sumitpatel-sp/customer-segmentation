@@ -106,6 +106,7 @@ def load_local_model():
     return None, None
 
 
+
 @st.cache_data
 def build_clustered_df() -> pd.DataFrame:
     """Attach cluster labels to every row. Uses local model; falls back to rules."""
