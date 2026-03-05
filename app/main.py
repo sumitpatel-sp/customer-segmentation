@@ -56,36 +56,48 @@ def get_segment_info_by_name(name: str) -> dict:
 
 def _build_cluster_segment_map():
     """
-    Assign a UNIQUE segment to each cluster by ranking centroids.
+    Assign a UNIQUE segment to each cluster by ranking the model's own
+    cluster centroids (model.cluster_centers_).
 
-    Method (same as frontend assign_cluster_segments):
-      1. Rank all clusters by average income → top half = "High Income"
-      2. Within each income group, higher avg spending → "High Spending"
+    Uses the model directly — NO CSV file needed — so this always works
+    on Render even if data/ is not present.
 
-    This guarantees all 4 segments always appear, even if two centroids
-    happen to sit on the same side of the 50k/50-score threshold.
+    Ranking method:
+      1. Rank all clusters by their centroid income (feature index 2)
+         → top half = "High Income", bottom half = "Low Income"
+      2. Within each income group, rank by centroid spending (feature index 3)
+         → higher spending = "High Spending"
     """
     global CLUSTER_TO_SEGMENT
     CLUSTER_TO_SEGMENT = {}
 
-    if model is None or not os.path.exists(DATA_PATH):
+    if model is None:
         return
 
-    df = pd.read_csv(DATA_PATH)
-    df["Gender"] = df["Gender"].map({"Male": 0, "Female": 1})
-    X = df[["Gender", "Age", "Annual Income (k$)", "Spending Score (1-100)"]].to_numpy()
-    df["Cluster"] = model.predict(scaler.transform(X))
+    # model.cluster_centers_ shape: (n_clusters, n_features)
+    # Features order: [GenderEncoded, Age, Annual Income (k$), Spending Score (1-100)]
+    # Unscale centroids back to original feature space
+    try:
+        centers_scaled = model.cluster_centers_                    # shape (4, 4)
+        centers_orig   = scaler.inverse_transform(centers_scaled)  # back to k$ / score
+    except Exception as e:
+        print(f"⚠️ Could not unscale centroids: {e}")
+        return
 
-    summary = (
-        df.groupby("Cluster")[["Annual Income (k$)", "Spending Score (1-100)"]]
-        .mean()
-        .reset_index()
-    )
+    n_clusters = len(centers_orig)
+    half       = n_clusters // 2
 
-    n    = len(summary)
-    half = n // 2
+    # Build a small dataframe of (cluster_id, avg_income, avg_spending)
+    rows = []
+    for cid, center in enumerate(centers_orig):
+        rows.append({
+            "Cluster":                cid,
+            "Annual Income (k$)":     center[2],   # index 2
+            "Spending Score (1-100)": center[3],   # index 3
+        })
+    summary = pd.DataFrame(rows)
 
-    # Rank by income: top half → High Income, bottom half → Low Income
+    # Rank by income descending: top half → High Income
     summary["inc_rank"] = summary["Annual Income (k$)"].rank(ascending=False, method="first").astype(int)
     high_inc = summary[summary["inc_rank"] <= half].sort_values("Spending Score (1-100)", ascending=False)
     low_inc  = summary[summary["inc_rank"] >  half].sort_values("Spending Score (1-100)", ascending=False)
@@ -99,9 +111,9 @@ def _build_cluster_segment_map():
     for cluster_id, seg_name in seg_assignments.items():
         CLUSTER_TO_SEGMENT[cluster_id] = get_segment_info_by_name(seg_name)
 
-    print("✅ Cluster → Segment map built:")
+    print("Cluster to Segment map built:")
     for cid, info in CLUSTER_TO_SEGMENT.items():
-        print(f"   Cluster {cid} → {info['name']}")
+        print(f"  Cluster {cid} -> {info['name']}")
 
 
 def _ensure_models_loaded():
