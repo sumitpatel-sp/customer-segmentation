@@ -9,11 +9,12 @@ import numpy as np
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-USD_TO_INR   = 83
-API_URL      = "https://customer-segmentation-2-166m.onrender.com"
-MODEL_PATH   = "models/kmeans.pkl"
-SCALER_PATH  = "models/scaler.pkl"
-DATA_PATH    = "data/Mall_Customers.csv"
+USD_TO_INR        = 83
+API_URL           = "http://127.0.0.1:8000"
+MODEL_PATH        = "models/kmeans.pkl"
+SCALER_PATH       = "models/scaler.pkl"
+CLUSTER_MAP_PATH  = "models/cluster_map.json"
+DATA_PATH         = "data/Mall_Customers.csv"
 
 SEGMENT_COLORS = {
     "High Income - High Spending": "#7C3AED",
@@ -58,7 +59,7 @@ SEGMENT_DEFINITIONS = {
 # SEGMENT LOGIC  (used as local fallback only)
 # ─────────────────────────────────────────────
 def get_segment_name(income_k: float, spending: float) -> str:
-    """Rule-based fallback when API is unreachable."""
+    """Rule-based fallback — only used when cluster_map AND API are both unavailable."""
     if income_k >= 50 and spending >= 50:
         return "High Income - High Spending"
     elif income_k >= 50:
@@ -67,6 +68,13 @@ def get_segment_name(income_k: float, spending: float) -> str:
         return "Low Income - High Spending"
     else:
         return "Low Income - Low Spending"
+
+
+def cluster_to_segment(cluster_id: int, cluster_map: dict, income_k: float, spending: float) -> str:
+    """Return segment name from cluster_map if available, else fall back to rules."""
+    if cluster_id is not None and cluster_map and cluster_id in cluster_map:
+        return cluster_map[cluster_id]
+    return get_segment_name(income_k, spending)
 
 
 def assign_cluster_segments(cs_df: pd.DataFrame) -> pd.DataFrame:
@@ -106,18 +114,32 @@ def load_local_model():
     return None, None
 
 
+@st.cache_data
+def load_cluster_map() -> dict:
+    """Load cluster→segment mapping saved at training time."""
+    if os.path.exists(CLUSTER_MAP_PATH):
+        import json
+        with open(CLUSTER_MAP_PATH) as f:
+            raw = json.load(f)
+        return {int(k): v for k, v in raw.items()}
+    return {}
+
+
 
 @st.cache_data
 def build_clustered_df() -> pd.DataFrame:
-    """Attach cluster labels to every row. Uses local model; falls back to rules."""
+    """Attach cluster labels & cluster-driven segments to every row."""
     df = load_raw_data().copy()
     df["GenderEncoded"] = df["Gender"].map({"Male": 0, "Female": 1})
 
+    cluster_map = load_cluster_map()
     model, scaler = load_local_model()
+
     if model is not None:
-        X = df[["GenderEncoded", "Age", "Annual Income (k$)", "Spending Score (1-100)"]].to_numpy()
+        X = df[["Annual Income (k$)", "Spending Score (1-100)"]].to_numpy()
         df["Cluster"] = model.predict(scaler.transform(X))
     else:
+        # No local model — assign a placeholder cluster via rules
         df["Cluster"] = df.apply(
             lambda r: 0 if (r["Annual Income (k$)"] >= 50 and r["Spending Score (1-100)"] >= 50)
                       else 1 if  r["Annual Income (k$)"] >= 50
@@ -126,9 +148,12 @@ def build_clustered_df() -> pd.DataFrame:
             axis=1,
         )
 
-    # Per-customer segment via threshold rules (for scatter plot colouring)
+    # Segment driven by cluster_map; falls back to threshold rules if map unavailable
     df["Segment"] = df.apply(
-        lambda r: get_segment_name(r["Annual Income (k$)"], r["Spending Score (1-100)"]),
+        lambda r: cluster_to_segment(
+            int(r["Cluster"]), cluster_map,
+            r["Annual Income (k$)"], r["Spending Score (1-100)"]
+        ),
         axis=1,
     )
     return df
@@ -547,10 +572,18 @@ def main():
                             used_api   = False
 
                     except requests.exceptions.RequestException:
-                        st.warning("⚠️ FastAPI service unreachable — using local rule-based result.")
-                        cluster_id = "—"
-                        seg_name   = get_segment_name(income_k, spending)
-                        used_api   = False
+                        st.warning("⚠️ FastAPI service unreachable — using local cluster-based fallback.")
+                        # Try to use the local model + cluster_map before falling back to rules
+                        _model, _scaler = load_local_model()
+                        _cluster_map    = load_cluster_map()
+                        if _model is not None:
+                            _X         = np.array([[gender, age, income_k, spending]])
+                            cluster_id = int(_model.predict(_scaler.transform(_X))[0])
+                            seg_name   = cluster_to_segment(cluster_id, _cluster_map, income_k, spending)
+                        else:
+                            cluster_id = "—"
+                            seg_name   = get_segment_name(income_k, spending)
+                        used_api = False
 
                 # ── Render result card ──────────────────────────
                 info  = SEGMENT_DEFINITIONS.get(seg_name, SEGMENT_DEFINITIONS["Low Income - Low Spending"])

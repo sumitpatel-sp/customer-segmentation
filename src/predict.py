@@ -13,9 +13,12 @@ def predict_cluster(input_data, model, scaler):
     model : sklearn.cluster.KMeans
         Trained clustering model.
     scaler : sklearn.preprocessing.StandardScaler
-        Fitted scaler used during training.
+        Fitted scaler used during training (fitted on Income & Spending only).
     """
-    data = np.array(input_data).reshape(1, -1)
+    # Model is trained on [Income, Spending] only
+    income   = input_data[2]
+    spending = input_data[3]
+    data   = np.array([[income, spending]])
     scaled = scaler.transform(data)
     cluster = model.predict(scaled)
     return int(cluster[0])
