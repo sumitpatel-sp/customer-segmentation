@@ -10,7 +10,7 @@ import numpy as np
 # CONFIG
 # ─────────────────────────────────────────────
 USD_TO_INR        = 83
-API_URL           = "http://127.0.0.1:8000"
+API_URL           = "https://customer-segmentation-l8z2.onrender.com"
 MODEL_PATH        = "models/kmeans.pkl"
 SCALER_PATH       = "models/scaler.pkl"
 CLUSTER_MAP_PATH  = "models/cluster_map.json"
