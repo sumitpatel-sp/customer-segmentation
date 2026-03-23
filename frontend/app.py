@@ -4,107 +4,145 @@ import pandas as pd
 import altair as alt
 import joblib
 import os
+import json
+import datetime as dt
 import numpy as np
 
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-USD_TO_INR        = 83
-API_URL           = "https://customer-segmentation-l8z2.onrender.com"
-MODEL_PATH        = "models/kmeans.pkl"
-SCALER_PATH       = "models/scaler.pkl"
-CLUSTER_MAP_PATH  = "models/cluster_map.json"
-DATA_PATH         = "data/Mall_Customers.csv"
+API_URL          = "http://localhost:8000"
+MODEL_PATH       = "models/kmeans.pkl"
+SCALER_PATH      = "models/scaler.pkl"
+CLUSTER_MAP_PATH = "models/cluster_map.json"
+DATA_PATH        = "data/data.csv"
+RFM_PATH         = "rfm_segments.csv"
 
 SEGMENT_COLORS = {
-    "High Income - High Spending": "#7C3AED",
-    "High Income - Low Spending":  "#2563EB",
-    "Low Income - High Spending":  "#D97706",
-    "Low Income - Low Spending":   "#6B7280",
+    "High Value": "#7C3AED",
+    "Loyal":      "#2563EB",
+    "At Risk":    "#D97706",
+    "Low Value":  "#6B7280",
 }
 
 SEGMENT_DEFINITIONS = {
-    "High Income - High Spending": {
+    "High Value": {
         "icon":        "💎",
-        "description": "Valuable customers already spending a lot",
-        "strategy":    "Loyalty rewards, premium membership, early product access",
-        "goal":        "Retain & delight — maximize lifetime value",
+        "description": "High-spend, high-frequency, recent buyers — your most profitable customers",
+        "strategy":    "VIP programmes, exclusive early access, personal account managers",
+        "goal":        "Retain & delight — maximise lifetime value",
         "color":       "#7C3AED",
     },
-    "High Income - Low Spending": {
-        "icon":        "💰",
-        "description": "Have money but are not spending much",
-        "strategy":    "Upsell, targeted marketing, premium recommendations",
-        "goal":        "Convert potential — move them up the spending ladder",
+    "Loyal": {
+        "icon":        "🔄",
+        "description": "Frequent buyers with moderate spend — consistent and reliable",
+        "strategy":    "Cross-sell, volume discounts, subscription incentives",
+        "goal":        "Grow basket size and increase spend per order",
         "color":       "#2563EB",
     },
-    "Low Income - High Spending": {
-        "icon":        "🛒",
-        "description": "Spending a lot but are budget sensitive",
-        "strategy":    "Discounts, bundles, retarget offers",
-        "goal":        "Maintain spending without churn",
+    "At Risk": {
+        "icon":        "⚠️",
+        "description": "Customers who haven't purchased recently — potential churners",
+        "strategy":    "Win-back campaigns, personalised outreach, special discounts",
+        "goal":        "Re-engage before permanent churn",
         "color":       "#D97706",
     },
-    "Low Income - Low Spending": {
+    "Low Value": {
         "icon":        "💤",
-        "description": "Low value customers — minimal engagement",
-        "strategy":    "Low cost campaigns, awareness campaigns (avoid heavy spend)",
-        "goal":        "Nurture gently — do not waste marketing budget",
+        "description": "Infrequent, low-spend customers — minimal engagement",
+        "strategy":    "Low-cost awareness campaigns, product discovery nudges",
+        "goal":        "Nurture gently — avoid wasting marketing budget",
         "color":       "#6B7280",
     },
 }
 
 
 # ─────────────────────────────────────────────
-# SEGMENT LOGIC  (used as local fallback only)
+# SEGMENT LOGIC  (local rule-based fallback)
 # ─────────────────────────────────────────────
-def get_segment_name(income_k: float, spending: float) -> str:
-    """Rule-based fallback — only used when cluster_map AND API are both unavailable."""
-    if income_k >= 50 and spending >= 50:
-        return "High Income - High Spending"
-    elif income_k >= 50:
-        return "High Income - Low Spending"
-    elif spending >= 50:
-        return "Low Income - High Spending"
+def get_segment_name_local(recency: float, frequency: float, monetary: float) -> str:
+    if monetary > 1000 and frequency > 10:
+        return "High Value"
+    elif frequency > 10:
+        return "Loyal"
+    elif recency > 100:
+        return "At Risk"
     else:
-        return "Low Income - Low Spending"
+        return "Low Value"
 
 
-def cluster_to_segment(cluster_id: int, cluster_map: dict, income_k: float, spending: float) -> str:
-    """Return segment name from cluster_map if available, else fall back to rules."""
+def cluster_to_segment(cluster_id: int, cluster_map: dict,
+                       recency: float, frequency: float, monetary: float) -> str:
     if cluster_id is not None and cluster_map and cluster_id in cluster_map:
         return cluster_map[cluster_id]
-    return get_segment_name(income_k, spending)
-
-
-def assign_cluster_segments(cs_df: pd.DataFrame) -> pd.DataFrame:
-    """Rank cluster centroids to assign unique segment labels to the profile table."""
-    df   = cs_df.copy().reset_index(drop=True)
-    half = len(df) // 2
-
-    inc_ranks    = df["Annual Income (k$)"].rank(ascending=False, method="first").astype(int)
-    high_inc_idx = df.index[inc_ranks <= half].tolist()
-    low_inc_idx  = df.index[inc_ranks >  half].tolist()
-
-    hi_grp = df.loc[high_inc_idx].sort_values("Spending Score (1-100)", ascending=False)
-    lo_grp = df.loc[low_inc_idx ].sort_values("Spending Score (1-100)", ascending=False)
-
-    seg_map = {}
-    if len(hi_grp) >= 1: seg_map[hi_grp.index[0]] = "High Income - High Spending"
-    if len(hi_grp) >= 2: seg_map[hi_grp.index[1]] = "High Income - Low Spending"
-    if len(lo_grp) >= 1: seg_map[lo_grp.index[0]] = "Low Income - High Spending"
-    if len(lo_grp) >= 2: seg_map[lo_grp.index[1]] = "Low Income - Low Spending"
-
-    df["Segment"] = df.index.map(seg_map)
-    return df
+    return get_segment_name_local(recency, frequency, monetary)
 
 
 # ─────────────────────────────────────────────
 # DATA LOADERS
 # ─────────────────────────────────────────────
 @st.cache_data
-def load_raw_data() -> pd.DataFrame:
-    return pd.read_csv(DATA_PATH)
+def load_raw_transactions() -> pd.DataFrame:
+    return pd.read_csv(DATA_PATH, encoding="ISO-8859-1")
+
+
+@st.cache_data
+def build_rfm_df() -> pd.DataFrame:
+    """Build cleaned RFM table from raw transactions."""
+    df = load_raw_transactions()
+    df = df.dropna(subset=["CustomerID"])
+    df = df[df["Quantity"] > 0]
+    df["InvoiceDate"] = pd.to_datetime(df["InvoiceDate"])
+    df["TotalPrice"]  = df["Quantity"] * df["UnitPrice"]
+
+    reference_date = df["InvoiceDate"].max() + dt.timedelta(days=1)
+
+    rfm = df.groupby("CustomerID").agg(
+        Recency   = ("InvoiceDate",  lambda x: (reference_date - x.max()).days),
+        Frequency = ("InvoiceNo",    "count"),
+        Monetary  = ("TotalPrice",   "sum"),
+    ).reset_index()
+
+    # Remove outliers (99th percentile)
+    rfm = rfm[rfm["Monetary"]  < rfm["Monetary"].quantile(0.99)]
+    rfm = rfm[rfm["Frequency"] < rfm["Frequency"].quantile(0.99)]
+    return rfm
+
+
+@st.cache_data
+def load_rfm_with_segments() -> pd.DataFrame:
+    """Load from saved rfm_segments.csv if available, else compute in-app."""
+    if os.path.exists(RFM_PATH):
+        rfm = pd.read_csv(RFM_PATH, index_col=0)
+        if "Segment" not in rfm.columns:
+            rfm["Segment"] = rfm.apply(
+                lambda r: get_segment_name_local(r["Recency"], r["Frequency"], r["Monetary"]),
+                axis=1,
+            )
+        return rfm
+
+    # Fallback: compute without model
+    rfm = build_rfm_df()
+    cluster_map = load_cluster_map()
+    model, scaler = load_local_model()
+
+    if model is not None:
+        X              = rfm[["Recency", "Frequency", "Monetary"]].to_numpy()
+        rfm["Cluster"] = model.predict(scaler.transform(X))
+        rfm["Segment"] = rfm.apply(
+            lambda r: cluster_to_segment(
+                int(r["Cluster"]), cluster_map,
+                r["Recency"], r["Frequency"], r["Monetary"]
+            ),
+            axis=1,
+        )
+    else:
+        rfm["Cluster"] = -1
+        rfm["Segment"] = rfm.apply(
+            lambda r: get_segment_name_local(r["Recency"], r["Frequency"], r["Monetary"]),
+            axis=1,
+        )
+    return rfm
 
 
 @st.cache_data
@@ -116,47 +154,11 @@ def load_local_model():
 
 @st.cache_data
 def load_cluster_map() -> dict:
-    """Load cluster→segment mapping saved at training time."""
     if os.path.exists(CLUSTER_MAP_PATH):
-        import json
         with open(CLUSTER_MAP_PATH) as f:
             raw = json.load(f)
         return {int(k): v for k, v in raw.items()}
     return {}
-
-
-
-@st.cache_data
-def build_clustered_df() -> pd.DataFrame:
-    """Attach cluster labels & cluster-driven segments to every row."""
-    df = load_raw_data().copy()
-    df["GenderEncoded"] = df["Gender"].map({"Male": 0, "Female": 1})
-
-    cluster_map = load_cluster_map()
-    model, scaler = load_local_model()
-
-    if model is not None:
-        X = df[["Annual Income (k$)", "Spending Score (1-100)"]].to_numpy()
-        df["Cluster"] = model.predict(scaler.transform(X))
-    else:
-        # No local model — assign a placeholder cluster via rules
-        df["Cluster"] = df.apply(
-            lambda r: 0 if (r["Annual Income (k$)"] >= 50 and r["Spending Score (1-100)"] >= 50)
-                      else 1 if  r["Annual Income (k$)"] >= 50
-                      else 2 if  r["Spending Score (1-100)"] >= 50
-                      else 3,
-            axis=1,
-        )
-
-    # Segment driven by cluster_map; falls back to threshold rules if map unavailable
-    df["Segment"] = df.apply(
-        lambda r: cluster_to_segment(
-            int(r["Cluster"]), cluster_map,
-            r["Annual Income (k$)"], r["Spending Score (1-100)"]
-        ),
-        axis=1,
-    )
-    return df
 
 
 # ─────────────────────────────────────────────
@@ -238,7 +240,7 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 # ─────────────────────────────────────────────
 def main():
     st.set_page_config(
-        page_title="Consumer Segmentation Intelligence",
+        page_title="RFM Customer Segmentation",
         page_icon="📊",
         layout="wide",
         initial_sidebar_state="collapsed",
@@ -249,20 +251,28 @@ def main():
     st.markdown("""
     <div style='text-align:center; padding:40px 0 20px 0;'>
         <div style='font-size:0.85rem; font-weight:700; letter-spacing:.15em; color:#a78bfa; margin-bottom:10px;'>
-            POWERED BY K-MEANS CLUSTERING
+            POWERED BY RFM ANALYSIS &amp; K-MEANS CLUSTERING
         </div>
         <h1 style='font-size:2.8rem; font-weight:900; margin:0;
                    background:linear-gradient(90deg,#a78bfa,#60a5fa,#34d399);
                    -webkit-background-clip:text; -webkit-text-fill-color:transparent;'>
-            Consumer Segmentation Intelligence
+            RFM Customer Segmentation Intelligence
         </h1>
         <p style='color:#94a3b8; margin-top:12px; font-size:1.05rem;'>
-            Unlock data&#8209;driven customer insights &nbsp;&middot;&nbsp;
-            Discover actionable strategies &nbsp;&middot;&nbsp;
-            Predict new customers instantly
+            Recency &nbsp;&middot;&nbsp; Frequency &nbsp;&middot;&nbsp; Monetary
+            &nbsp;&middot;&nbsp; Discover actionable customer segments
         </p>
     </div>
     """, unsafe_allow_html=True)
+
+    # ── Sidebar: cache refresh ─────────────────
+    with st.sidebar:
+        st.markdown("### ⚙️ Controls")
+        if st.button("🔄 Refresh Data Cache", use_container_width=True,
+                     help="Clear cached data — use this after retraining the model"):
+            st.cache_data.clear()
+            st.success("Cache cleared! Reloading…")
+            st.rerun()
 
     # ── API health banner ──────────────────────
     try:
@@ -272,29 +282,21 @@ def main():
         else:
             st.warning("🟡 API reachable but unhealthy")
     except requests.exceptions.RequestException:
-        st.error("🔴 FastAPI service offline — predictions will use local rule-based fallback")
+        st.error("🔴 FastAPI service offline — predictions will use local model / rule-based fallback")
 
-    # ── Load local data ────────────────────────
-    df_raw       = load_raw_data()
-    df_clustered = build_clustered_df()
-
-    cluster_summary = (
-        df_clustered
-        .groupby("Cluster")[["Annual Income (k$)", "Spending Score (1-100)"]]
-        .mean()
-        .reset_index()
-    )
-    cluster_summary = assign_cluster_segments(cluster_summary)
+    # ── Load data ────────────────────────────
+    df_raw   = load_raw_transactions()
+    rfm_df   = load_rfm_with_segments()
 
     seg_sizes = (
-        df_clustered["Segment"]
+        rfm_df["Segment"]
         .value_counts()
         .rename_axis("Segment")
         .reset_index(name="Count")
     )
 
-    total_customers = len(df_clustered)
-    n_segments      = df_clustered["Segment"].nunique()
+    total_customers = rfm_df["CustomerID"].nunique() if "CustomerID" in rfm_df.columns else len(rfm_df)
+    n_segments      = rfm_df["Segment"].nunique()
 
     color_domain = list(SEGMENT_COLORS.keys())
     color_range  = list(SEGMENT_COLORS.values())
@@ -321,11 +323,12 @@ def main():
                         border-radius:16px; padding:24px;'>
                 <div style='font-size:1.1rem; font-weight:800; color:#a78bfa; margin-bottom:12px;'>🧩 Problem Statement</div>
                 <p style='color:#cbd5e1; line-height:1.8; margin:0;'>
-                    Retailers struggle to understand <strong>diverse customer needs</strong>.
+                    E-commerce businesses struggle to understand <strong>diverse customer behaviours</strong>.
                     A one-size-fits-all approach leads to <strong>wasted budget</strong>,
                     <strong>poor engagement</strong>, and <strong>high churn</strong>.<br><br>
-                    This project applies <strong>K-Means Clustering</strong> on mall customer data to
-                    discover meaningful groups — enabling laser-focused marketing strategies.
+                    This project applies <strong>RFM Analysis + K-Means Clustering</strong> on real UK
+                    e-commerce transaction data to discover meaningful customer groups — enabling
+                    laser-focused marketing strategies.
                 </p>
             </div>
             """, unsafe_allow_html=True)
@@ -334,14 +337,14 @@ def main():
             st.markdown("""
             <div style='background:rgba(37,99,235,0.15); border:1px solid rgba(37,99,235,0.4);
                         border-radius:16px; padding:24px;'>
-                <div style='font-size:1.1rem; font-weight:800; color:#60a5fa; margin-bottom:12px;'>💡 Why Segmentation Matters</div>
+                <div style='font-size:1.1rem; font-weight:800; color:#60a5fa; margin-bottom:12px;'>💡 Why RFM Segmentation?</div>
                 <ul style='color:#cbd5e1; line-height:2.1; margin:0; padding-left:18px;'>
-                    <li><strong>Personalization</strong> — Tailor offers to each group</li>
-                    <li><strong>Budget Efficiency</strong> — Stop wasting spend on wrong audiences</li>
-                    <li><strong>Retention</strong> — Identify and nurture high-value customers</li>
-                    <li><strong>Upsell Opportunities</strong> — Spot customers ready to spend more</li>
-                    <li><strong>Churn Reduction</strong> — Proactively engage budget-sensitive buyers</li>
-                    <li><strong>Data-Driven Decisions</strong> — Move from gut-feel to evidence</li>
+                    <li><strong>Recency</strong> — How recently did they buy? (lower = better)</li>
+                    <li><strong>Frequency</strong> — How often do they buy? (higher = better)</li>
+                    <li><strong>Monetary</strong> — How much do they spend? (higher = better)</li>
+                    <li><strong>Actionable</strong> — Each segment gets a targeted strategy</li>
+                    <li><strong>Scalable</strong> — Works on millions of transactions</li>
+                    <li><strong>Proven</strong> — Industry-standard for retail CRM</li>
                 </ul>
             </div>
             """, unsafe_allow_html=True)
@@ -350,17 +353,25 @@ def main():
         col_ds, col_km = st.columns((3, 2), gap="large")
 
         with col_ds:
-            st.markdown("**📁 Dataset Sample — Mall Customers**")
+            st.markdown("**📁 Dataset Sample — UK E-Commerce Transactions**")
             st.dataframe(df_raw.head(12), use_container_width=True, hide_index=True)
-            st.caption(f"**{len(df_raw)} total records** · CustomerID, Gender, Age, Annual Income (k$), Spending Score (1-100)")
+            n_countries = df_raw["Country"].nunique() if "Country" in df_raw.columns else "—"
+            date_min    = pd.to_datetime(df_raw["InvoiceDate"]).min().strftime("%d %b %Y") if "InvoiceDate" in df_raw.columns else "—"
+            date_max    = pd.to_datetime(df_raw["InvoiceDate"]).max().strftime("%d %b %Y") if "InvoiceDate" in df_raw.columns else "—"
+            st.caption(
+                f"**{len(df_raw):,} total rows** · {n_countries} countries · "
+                f"{date_min} → {date_max}"
+            )
 
         with col_km:
             st.markdown("**📈 Key Metrics**")
             m1, m2 = st.columns(2)
-            m1.metric("👥 Total Customers", f"{total_customers:,}")
-            m2.metric("🔢 Segments Found",  str(n_segments))
+            m1.metric("👥 Unique Customers", f"{total_customers:,}")
+            m2.metric("🔢 Segments Found",   str(n_segments))
             st.markdown("<br>", unsafe_allow_html=True)
-            stats = df_raw[["Age", "Annual Income (k$)", "Spending Score (1-100)"]].describe().loc[["mean","min","max"]]
+
+            # RFM summary stats
+            stats = rfm_df[["Recency", "Frequency", "Monetary"]].describe().loc[["mean", "min", "max"]]
             stats.index = ["Avg", "Min", "Max"]
             st.dataframe(stats.style.format("{:.1f}"), use_container_width=True)
 
@@ -369,20 +380,28 @@ def main():
     # ══════════════════════════════════════════
     with tab2:
         st.markdown('<div class="section-title">Segmentation Dashboard</div>', unsafe_allow_html=True)
-        st.markdown('<div class="section-sub">Visual exploration of K-Means clusters across income &amp; spending dimensions</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-sub">Visual exploration of K-Means RFM clusters</div>',
+            unsafe_allow_html=True,
+        )
 
         col_scatter, col_bar = st.columns((3, 2), gap="large")
 
         with col_scatter:
-            st.markdown("**Income vs Spending — Colored by Segment**")
+            st.markdown("**Monetary vs Recency — Coloured by Segment**")
+            # Sample for performance (large dataset)
+            plot_df = rfm_df.sample(min(3000, len(rfm_df)), random_state=42) if len(rfm_df) > 3000 else rfm_df
             scatter = (
-                alt.Chart(df_clustered)
-                .mark_circle(size=80, opacity=0.82, stroke="#0f172a", strokeWidth=0.5)
+                alt.Chart(plot_df)
+                .mark_circle(size=60, opacity=0.75, stroke="#0f172a", strokeWidth=0.5)
                 .encode(
-                    x=alt.X("Annual Income (k$):Q", scale=alt.Scale(zero=False),
+                    x=alt.X("Recency:Q",
+                            title="Recency (days since last purchase)",
+                            scale=alt.Scale(zero=False),
                             axis=alt.Axis(labelColor="#94a3b8", titleColor="#94a3b8",
                                           gridColor="rgba(255,255,255,0.07)")),
-                    y=alt.Y("Spending Score (1-100):Q", title="Spending Score (1–100)",
+                    y=alt.Y("Monetary:Q",
+                            title="Monetary (£ total spend)",
                             scale=alt.Scale(zero=False),
                             axis=alt.Axis(labelColor="#94a3b8", titleColor="#94a3b8",
                                           gridColor="rgba(255,255,255,0.07)")),
@@ -391,11 +410,10 @@ def main():
                                     legend=alt.Legend(orient="bottom", labelColor="#cbd5e1",
                                                       titleColor="#94a3b8", title="Segment")),
                     tooltip=[
-                        alt.Tooltip("Annual Income (k$):Q",     title="Income (k$)",    format=".1f"),
-                        alt.Tooltip("Spending Score (1-100):Q", title="Spending Score", format=".0f"),
-                        alt.Tooltip("Gender:N",  title="Gender"),
-                        alt.Tooltip("Age:Q",     title="Age"),
-                        alt.Tooltip("Segment:N", title="Segment"),
+                        alt.Tooltip("Recency:Q",   title="Recency (days)", format=".0f"),
+                        alt.Tooltip("Frequency:Q", title="Frequency",      format=".0f"),
+                        alt.Tooltip("Monetary:Q",  title="Monetary (£)",   format=".2f"),
+                        alt.Tooltip("Segment:N",   title="Segment"),
                     ],
                 )
                 .properties(height=420, background="transparent")
@@ -410,7 +428,7 @@ def main():
                 .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
                 .encode(
                     x=alt.X("Segment:N", sort="-y", title=None,
-                            axis=alt.Axis(labelAngle=-18, labelColor="#94a3b8", labelLimit=180)),
+                            axis=alt.Axis(labelAngle=-18, labelColor="#94a3b8", labelLimit=160)),
                     y=alt.Y("Count:Q", title="# Customers",
                             axis=alt.Axis(labelColor="#94a3b8", titleColor="#94a3b8",
                                           gridColor="rgba(255,255,255,0.07)")),
@@ -424,30 +442,84 @@ def main():
             )
             st.altair_chart(bar, use_container_width=True)
 
+        # Frequency distribution
+        st.markdown("---")
+        col_freq, col_rec = st.columns(2, gap="large")
+
+        with col_freq:
+            st.markdown("**Frequency Distribution (orders per customer)**")
+            freq_hist = (
+                alt.Chart(rfm_df)
+                .mark_bar(color="#a78bfa", cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+                .encode(
+                    alt.X("Frequency:Q", bin=alt.Bin(maxbins=40), title="Number of Orders"),
+                    alt.Y("count()", title="# Customers",
+                          axis=alt.Axis(labelColor="#94a3b8", titleColor="#94a3b8",
+                                        gridColor="rgba(255,255,255,0.07)")),
+                )
+                .properties(height=220, background="transparent")
+                .configure_view(strokeWidth=0)
+            )
+            st.altair_chart(freq_hist, use_container_width=True)
+
+        with col_rec:
+            st.markdown("**Recency Distribution (days since last purchase)**")
+            rec_hist = (
+                alt.Chart(rfm_df)
+                .mark_bar(color="#60a5fa", cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+                .encode(
+                    alt.X("Recency:Q", bin=alt.Bin(maxbins=40), title="Recency (days)"),
+                    alt.Y("count()", title="# Customers",
+                          axis=alt.Axis(labelColor="#94a3b8", titleColor="#94a3b8",
+                                        gridColor="rgba(255,255,255,0.07)")),
+                )
+                .properties(height=220, background="transparent")
+                .configure_view(strokeWidth=0)
+            )
+            st.altair_chart(rec_hist, use_container_width=True)
+
         # Cluster profile table
         st.markdown("---")
         st.markdown("**📋 Cluster Profile Table**")
-        display_cs = cluster_summary.rename(columns={
-            "Cluster":                "Cluster ID",
-            "Annual Income (k$)":     "Avg Income (k$)",
-            "Spending Score (1-100)": "Avg Spending Score",
-        })[["Cluster ID", "Segment", "Avg Income (k$)", "Avg Spending Score"]]
-        st.dataframe(
-            display_cs.style.format({"Avg Income (k$)": "{:.1f}", "Avg Spending Score": "{:.1f}"}),
-            use_container_width=True, hide_index=True,
-        )
+        if "KMeans_Cluster" in rfm_df.columns:
+            cluster_prof = (
+                rfm_df.groupby("KMeans_Cluster")[["Recency", "Frequency", "Monetary"]]
+                .mean()
+                .reset_index()
+                .rename(columns={
+                    "KMeans_Cluster": "Cluster ID",
+                    "Recency":        "Avg Recency (days)",
+                    "Frequency":      "Avg Frequency",
+                    "Monetary":       "Avg Monetary (£)",
+                })
+            )
+            # Add segment name
+            cluster_map_local = load_cluster_map()
+            cluster_prof["Segment"] = cluster_prof["Cluster ID"].map(
+                lambda cid: cluster_map_local.get(int(cid), "—")
+            )
+            st.dataframe(
+                cluster_prof[["Cluster ID", "Segment", "Avg Recency (days)", "Avg Frequency", "Avg Monetary (£)"]]
+                .style.format({
+                    "Avg Recency (days)": "{:.1f}",
+                    "Avg Frequency":      "{:.1f}",
+                    "Avg Monetary (£)":   "£{:.2f}",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
 
         # Segment description cards
         st.markdown("<br>**🗂 Segment Descriptions**", unsafe_allow_html=True)
-        seg_names = cluster_summary["Segment"].dropna().unique().tolist()
+        seg_names = list(SEGMENT_DEFINITIONS.keys())
         cols = st.columns(len(seg_names))
 
         for idx, seg_name in enumerate(seg_names):
-            info  = SEGMENT_DEFINITIONS.get(seg_name, {})
-            color = info.get("color", "#374151")
-            icon  = info.get("icon", "📌")
-            desc  = info.get("description", "")
-            strat = info.get("strategy", "")
+            info  = SEGMENT_DEFINITIONS[seg_name]
+            color = info["color"]
+            icon  = info["icon"]
+            desc  = info["description"]
+            strat = info["strategy"]
             count_row = seg_sizes.loc[seg_sizes["Segment"] == seg_name, "Count"]
             count = int(count_row.values[0]) if len(count_row) > 0 else "—"
 
@@ -491,7 +563,7 @@ def main():
             count_row = seg_sizes.loc[seg_sizes["Segment"] == seg_name, "Count"]
             count     = int(count_row.values[0]) if len(count_row) > 0 else 0
 
-            with st.expander(f"{info['icon']}  {seg_name}  ·  {count} customers", expanded=False):
+            with st.expander(f"{info['icon']}  {seg_name}  ·  {count:,} customers", expanded=False):
                 c1, c2, c3 = st.columns(3)
                 with c1:
                     st.markdown(
@@ -517,7 +589,10 @@ def main():
     # ══════════════════════════════════════════
     with tab4:
         st.markdown('<div class="section-title">New Customer Prediction</div>', unsafe_allow_html=True)
-        st.markdown('<div class="section-sub">Enter customer details — the backend KMeans model predicts their segment instantly</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-sub">Enter RFM values — the model predicts the customer segment instantly</div>',
+            unsafe_allow_html=True,
+        )
 
         col_form, col_result = st.columns(2, gap="large")
 
@@ -525,68 +600,72 @@ def main():
             st.markdown(
                 '<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.12);'
                 'border-radius:16px;padding:24px;">'
-                '<div style="font-size:1rem;font-weight:700;color:#e2e8f0;margin-bottom:18px;">🧾 Customer Profile</div>'
+                '<div style="font-size:1rem;font-weight:700;color:#e2e8f0;margin-bottom:18px;">🧾 Customer RFM Profile</div>'
                 '</div>', unsafe_allow_html=True)
 
-            gender     = st.selectbox("Gender", options=[0, 1],
-                                      format_func=lambda x: "👨 Male" if x == 0 else "👩 Female")
-            age        = st.slider("Age", 18, 70, 30)
-            income_inr = st.number_input("Annual Income (₹ INR)", min_value=10_000,
-                                         step=50_000, value=500_000)
-            spending   = st.slider("Spending Score (1–100)", 1, 100, 50)
+            recency   = st.slider("📅 Recency (days since last purchase)", 1, 365, 30,
+                                  help="Lower = more recent = better")
+            frequency = st.slider("🔁 Frequency (number of orders)", 1, 200, 15,
+                                  help="Higher = buys more often = better")
+            monetary  = st.number_input("💷 Monetary (total spend in £)", min_value=1.0,
+                                        max_value=50000.0, step=50.0, value=500.0,
+                                        help="Total amount spent across all orders")
 
-            income_k = (income_inr / USD_TO_INR) / 1000
-            st.caption(f"💱  ₹{income_inr:,.0f}  →  **${income_k:.2f}k** (sent to model)")
+            st.markdown(
+                f'<div style="background:rgba(167,139,250,0.1);border:1px solid rgba(167,139,250,0.3);'
+                f'border-radius:12px;padding:14px;margin-top:8px;">'
+                f'<span style="color:#94a3b8;font-size:0.82rem;">Quick rule preview: </span>'
+                f'<span style="color:#a78bfa;font-weight:600;font-size:0.86rem;">'
+                f'{get_segment_name_local(recency, frequency, monetary)}'
+                f'</span></div>',
+                unsafe_allow_html=True,
+            )
 
             predict_clicked = st.button("🔮 Predict Segment", type="primary",
                                         use_container_width=True)
 
         with col_result:
             if predict_clicked:
-                # ── Call backend (KMeans model runs server-side) ──
-                with st.spinner("Calling model…"):
+                with st.spinner("Running model…"):
                     try:
                         resp = requests.post(
                             f"{API_URL}/predict",
                             json={
-                                "Gender":   gender,
-                                "Age":      age,
-                                "Income":   income_k,
-                                "Spending": spending,
+                                "Recency":   recency,
+                                "Frequency": frequency,
+                                "Monetary":  monetary,
                             },
                             timeout=15,
                         )
 
                         if resp.ok:
                             result     = resp.json()
-                            # cluster_id  — the raw KMeans cluster number (0-3)
                             cluster_id = result.get("Cluster", "—")
-                            # segment_name — derived by the backend from the cluster centroid's
-                            #                income/spending position (authoritative label)
-                            seg_name   = result.get("segment_name", get_segment_name(income_k, spending))
+                            seg_name   = result.get("segment_name",
+                                                    get_segment_name_local(recency, frequency, monetary))
                             used_api   = True
                         else:
-                            st.warning(f"⚠️ API returned {resp.status_code} — using local rule-based result.")
+                            st.warning(f"⚠️ API returned {resp.status_code} — using local result.")
                             cluster_id = "—"
-                            seg_name   = get_segment_name(income_k, spending)
+                            seg_name   = get_segment_name_local(recency, frequency, monetary)
                             used_api   = False
 
                     except requests.exceptions.RequestException:
                         st.warning("⚠️ FastAPI service unreachable — using local cluster-based fallback.")
-                        # Try to use the local model + cluster_map before falling back to rules
                         _model, _scaler = load_local_model()
                         _cluster_map    = load_cluster_map()
                         if _model is not None:
-                            _X         = np.array([[gender, age, income_k, spending]])
+                            _X         = np.array([[recency, frequency, monetary]])
                             cluster_id = int(_model.predict(_scaler.transform(_X))[0])
-                            seg_name   = cluster_to_segment(cluster_id, _cluster_map, income_k, spending)
+                            seg_name   = cluster_to_segment(cluster_id, _cluster_map,
+                                                            recency, frequency, monetary)
                         else:
                             cluster_id = "—"
-                            seg_name   = get_segment_name(income_k, spending)
+                            seg_name   = get_segment_name_local(recency, frequency, monetary)
                         used_api = False
 
-                # ── Render result card ──────────────────────────
-                info  = SEGMENT_DEFINITIONS.get(seg_name, SEGMENT_DEFINITIONS["Low Income - Low Spending"])
+                # ── Render result card ────────────────────────────
+                info  = SEGMENT_DEFINITIONS.get(seg_name, SEGMENT_DEFINITIONS["Low Value"])
                 color = info["color"]
                 icon  = info["icon"]
 
@@ -613,9 +692,9 @@ def main():
 
                 st.markdown(
                     f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
-                    f'<div class="info-pill">👤 Age {age}</div>'
-                    f'<div class="info-pill">💰 ₹{income_inr:,.0f}</div>'
-                    f'<div class="info-pill">🛍️ Spending {spending}/100</div>'
+                    f'<div class="info-pill">📅 Recency {recency}d</div>'
+                    f'<div class="info-pill">🔁 Frequency {frequency}</div>'
+                    f'<div class="info-pill">💷 £{monetary:,.2f}</div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
@@ -626,18 +705,18 @@ def main():
                     'border-radius:16px;padding:60px 30px;text-align:center;margin-top:10px;">'
                     '<div style="font-size:3rem;margin-bottom:12px;">🔮</div>'
                     '<div style="font-size:1rem;font-weight:600;color:#94a3b8;">'
-                    'Fill in the customer profile and click<br>'
+                    'Enter the customer\'s RFM values and click<br>'
                     '<strong style="color:#a78bfa;">Predict Segment</strong></div>'
                     '<div style="font-size:0.82rem;color:#475569;margin-top:10px;">'
-                    'The backend KMeans model will predict the cluster &amp; segment instantly'
+                    'Recency · Frequency · Monetary → segment in seconds'
                     '</div></div>',
                     unsafe_allow_html=True,
                 )
 
-    # ── Footer ────────────────────────────────
+    # ── Footer ─────────────────────────────────
     st.markdown(
         '<div style="text-align:center;padding:30px 0 10px 0;color:#475569;font-size:0.78rem;">'
-        'Consumer Segmentation Intelligence &nbsp;&middot;&nbsp; K-Means Clustering'
+        'RFM Customer Segmentation Intelligence &nbsp;&middot;&nbsp; K-Means Clustering'
         ' &nbsp;&middot;&nbsp; Built with Streamlit &amp; FastAPI'
         '</div>',
         unsafe_allow_html=True,

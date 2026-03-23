@@ -1,24 +1,21 @@
 import numpy as np
 
 
-def predict_cluster(input_data, model, scaler):
+def predict_cluster(input_data, model, scaler) -> int:
     """
-    Predict the cluster for a single customer.
+    Predict the KMeans cluster for a single customer.
 
     Parameters
     ----------
     input_data : list or array-like
-        Raw feature values in the order:
-        [Gender (0/1), Age, Annual Income (k$), Spending Score (1-100)].
-    model : sklearn.cluster.KMeans
-        Trained clustering model.
-    scaler : sklearn.preprocessing.StandardScaler
-        Fitted scaler used during training (fitted on Income & Spending only).
+        Raw (unscaled) RFM values: [Recency, Frequency, Monetary]
+    model  : sklearn.cluster.KMeans — trained clustering model
+    scaler : sklearn.preprocessing.StandardScaler — fitted on RFM features
+
+    Returns
+    -------
+    int — cluster ID (0 to n_clusters-1)
     """
-    # Model is trained on [Income, Spending] only
-    income   = input_data[2]
-    spending = input_data[3]
-    data   = np.array([[income, spending]])
+    data   = np.array([input_data])        # shape (1, 3)
     scaled = scaler.transform(data)
-    cluster = model.predict(scaled)
-    return int(cluster[0])
+    return int(model.predict(scaled)[0])
