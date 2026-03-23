@@ -5,5 +5,5 @@ __pycache__/
 *.pyc
 mlflow.db
 mlruns/
-models/
+# models/  <-- uncomment if you want to ignore models again
 .ipynb_checkpoints/
