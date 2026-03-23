@@ -11,7 +11,7 @@ import numpy as np
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-API_URL          = "http://localhost:8000"
+API_URL          = "https://customer-segmentation-l8z2.onrender.com"
 MODEL_PATH       = "models/kmeans.pkl"
 SCALER_PATH      = "models/scaler.pkl"
 CLUSTER_MAP_PATH = "models/cluster_map.json"
