@@ -18,7 +18,7 @@ def _build_cluster_map(model, scaler, rfm: pd.DataFrame) -> dict:
     - "High Value" → highest composite score  (high Monetary + high Frequency + low Recency)
     - "Loyal"      → second highest Frequency (but not the top composite)
     - "At Risk"    → highest Recency          (least recent buyer)
-    - "Low Value"  → remaining cluster
+    - "Potential Loyalists"  → remaining cluster
     """
     rfm = rfm.copy()
     rfm["Cluster"] = model.predict(scaler.transform(rfm[["Recency", "Frequency", "Monetary"]]))
@@ -60,7 +60,7 @@ def _build_cluster_map(model, scaler, rfm: pd.DataFrame) -> dict:
 
     # 4. Low Value   → whatever is left
     lv_idx = int(remaining.iloc[0]["Cluster"])
-    cluster_map[lv_idx] = "Low Value"
+    cluster_map[lv_idx] = "Potential Loyalists"
 
     return cluster_map
 

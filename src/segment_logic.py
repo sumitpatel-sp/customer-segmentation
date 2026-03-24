@@ -6,7 +6,7 @@ Segments
 High Value  — High spenders who buy frequently
 Loyal       — Frequent buyers but moderate spend
 At Risk     — Haven't purchased recently
-Low Value   — Infrequent, low spend
+Potential Loyalists — Frequent buyers with moderate spending
 """
 
 
@@ -19,7 +19,7 @@ def label_segment(recency: float, frequency: float, monetary: float) -> str:
     elif recency > 100:
         return "At Risk"
     else:
-        return "Low Value"
+        return "Potential Loyalists"
 
 
 SEGMENT_INFO = {
@@ -41,11 +41,11 @@ SEGMENT_INFO = {
         "strategy":    "Win-back campaigns, personalised outreach, special discounts",
         "goal":        "Re-engage before permanent churn",
     },
-    "Low Value": {
-        "name":        "Low Value",
-        "description": "Infrequent, low-spend customers — minimal engagement",
-        "strategy":    "Low-cost awareness campaigns, product discovery nudges",
-        "goal":        "Nurture gently — avoid wasting marketing budget",
+    "Potential Loyalists": {
+        "name":        "Potential Loyalists",
+        "description": "Frequent buyers with moderate spending — strong potential to become high-value customers",
+        "strategy":    "Personalized offers, loyalty programs, upselling & cross-selling strategies",
+        "goal":        "Convert into high-value customers through targeted engagement",
     },
 }
 

@@ -22,7 +22,7 @@ SEGMENT_COLORS = {
     "High Value": "#7C3AED",
     "Loyal":      "#2563EB",
     "At Risk":    "#D97706",
-    "Low Value":  "#6B7280",
+    "Potential Loyalists":  "#10B981",
 }
 
 SEGMENT_DEFINITIONS = {
@@ -47,12 +47,12 @@ SEGMENT_DEFINITIONS = {
         "goal":        "Re-engage before permanent churn",
         "color":       "#D97706",
     },
-    "Low Value": {
-        "icon":        "💤",
-        "description": "Infrequent, low-spend customers — minimal engagement",
-        "strategy":    "Low-cost awareness campaigns, product discovery nudges",
-        "goal":        "Nurture gently — avoid wasting marketing budget",
-        "color":       "#6B7280",
+    "Potential Loyalists": {
+        "icon":        "⭐",
+        "description": "Frequent buyers with moderate spending — strong potential to become high-value customers",
+        "strategy":    "Personalized offers, loyalty programs, upselling & cross-selling strategies",
+        "goal":        "Convert into high-value customers through targeted engagement",
+        "color":       "#10B981",
     },
 }
 
@@ -68,7 +68,7 @@ def get_segment_name_local(recency: float, frequency: float, monetary: float) ->
     elif recency > 100:
         return "At Risk"
     else:
-        return "Low Value"
+        return "Potential Loyalists"
 
 
 def cluster_to_segment(cluster_id: int, cluster_map: dict,
@@ -665,7 +665,7 @@ def main():
                         used_api = False
 
                 # ── Render result card ────────────────────────────
-                info  = SEGMENT_DEFINITIONS.get(seg_name, SEGMENT_DEFINITIONS["Low Value"])
+                info  = SEGMENT_DEFINITIONS.get(seg_name, SEGMENT_DEFINITIONS["Potential Loyalists"])
                 color = info["color"]
                 icon  = info["icon"]
 

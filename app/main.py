@@ -68,7 +68,7 @@ def predict(customer: Customer):
     data    = [customer.Recency, customer.Frequency, customer.Monetary]
     cluster = predict_cluster(data, model=model, scaler=scaler)
 
-    seg_name = cluster_map.get(cluster, "Low Value")
+    seg_name = cluster_map.get(cluster, "Potential Loyalists")
     seg_info = get_segment_info_by_name(seg_name)
 
     return {
